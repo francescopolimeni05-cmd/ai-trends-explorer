@@ -1,12 +1,10 @@
-import asyncio
+import uuid
 from pathlib import Path
-import time
 import streamlit as st
-import inngest
 from dotenv import load_dotenv
 from styles import inject_css, sidebar_nav
-import os
-import requests
+from data_loader import load_and_chunk_pdf, embed_texts
+from vector_db import QdrantStorage
 
 load_dotenv()
 
@@ -14,11 +12,7 @@ st.set_page_config(page_title="Upload Report — AI Trends Explorer", layout="wi
 inject_css()
 sidebar_nav()
 
-# ── Inngest helpers (unchanged logic) ────────────────────────────────────────
-
-@st.cache_resource
-def get_inngest_client() -> inngest.Inngest:
-    return inngest.Inngest(app_id="rag-project", is_production=False)
+# ── Direct ingestion (no Inngest needed) ────────────────────────────────────
 
 def save_uploaded_pdf(file) -> Path:
     uploads_dir = Path("uploaded_docs")
@@ -27,64 +21,33 @@ def save_uploaded_pdf(file) -> Path:
     file_path.write_bytes(file.getbuffer())
     return file_path
 
-async def send_rag_ingest_event(pdf_path: Path) -> str:
-    client = get_inngest_client()
-    result = await client.send(
-        inngest.Event(
-            name="rag/ingest-pdf",
-            data={
-                "pdf_file_path": str(pdf_path.resolve()),
-                "source_id": pdf_path.name,
-            },
-        )
-    )
-    return result[0] if result else None
 
-def _inngest_api_base() -> str:
-    return os.getenv("INNGEST_API_BASE", "http://127.0.0.1:8288/v1")
+def ingest_pdf(file_path: Path) -> int:
+    """Load, chunk, embed, and store a PDF directly into Qdrant."""
+    chunks = load_and_chunk_pdf(str(file_path))
+    if not chunks:
+        return 0
 
-def fetch_runs(event_id: str) -> list[dict]:
-    try:
-        resp = requests.get(
-            f"{_inngest_api_base()}/events/{event_id}/runs", timeout=5
-        )
-        resp.raise_for_status()
-        return resp.json().get("data", [])
-    except Exception:
-        return []
+    vectors = embed_texts(chunks)
+    source_id = file_path.name
+    ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source_id}:{i}")) for i in range(len(chunks))]
+    payloads = [
+        {
+            "text": chunks[i],
+            "title": file_path.stem,
+            "url": "",
+            "date": "",
+            "source_type": "pdf",
+            "category": "uploaded",
+            "feed_name": "User Upload",
+        }
+        for i in range(len(chunks))
+    ]
 
-def wait_for_run_output(event_id: str, timeout_s: float = 120.0) -> dict:
-    start = time.time()
-    last_status = "Pending"
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    db = QdrantStorage()
+    db.upsert(ids, vectors, payloads)
+    return len(chunks)
 
-    while True:
-        elapsed = time.time() - start
-        progress_bar.progress(min(elapsed / timeout_s, 0.99))
-
-        runs = fetch_runs(event_id)
-        if runs:
-            status = runs[0].get("status", "Running")
-            last_status = status
-            status_text.caption(f"Status: {status}")
-
-            if status in ("Completed", "Succeeded", "Success", "Finished"):
-                progress_bar.progress(1.0)
-                status_text.empty()
-                return runs[0].get("output") or {}
-
-            if status in ("Failed", "Cancelled"):
-                progress_bar.empty()
-                status_text.empty()
-                raise RuntimeError(f"Ingestion run {status}")
-
-        if elapsed > timeout_s:
-            progress_bar.empty()
-            status_text.empty()
-            raise TimeoutError(f"Timed out (last status: {last_status})")
-
-        time.sleep(0.5)
 
 # ── Page ─────────────────────────────────────────────────────────────────────
 
@@ -156,24 +119,14 @@ else:
             st.markdown(f"**{idx + 1} / {len(uploaded_files)} — {uploaded_file.name}**")
 
             try:
-                with st.spinner("Saving..."):
+                with st.spinner("Saving PDF..."):
                     file_path = save_uploaded_pdf(uploaded_file)
 
-                with st.spinner("Sending to ingestion pipeline..."):
-                    event_id = asyncio.run(send_rag_ingest_event(file_path))
-                    if not event_id:
-                        raise Exception("Failed to obtain event ID from Inngest")
+                with st.spinner("Chunking, embedding, and storing in Qdrant..."):
+                    num_chunks = ingest_pdf(file_path)
 
-                st.caption(f"Event ID: {event_id}")
-                output = wait_for_run_output(event_id)
-                chunks = output.get("ingested", 0)
-
-                st.success(f"{uploaded_file.name} — {chunks} chunks indexed")
-                results.append({"file": uploaded_file.name, "status": "success", "chunks": chunks})
-
-            except TimeoutError as e:
-                st.warning(f"{uploaded_file.name} — timed out. Check Inngest dashboard.")
-                results.append({"file": uploaded_file.name, "status": "timeout", "chunks": 0})
+                st.success(f"{uploaded_file.name} — {num_chunks} chunks indexed")
+                results.append({"file": uploaded_file.name, "status": "success", "chunks": num_chunks})
 
             except Exception as e:
                 st.error(f"{uploaded_file.name} — {e}")
@@ -204,8 +157,9 @@ st.divider()
 st.markdown('<div class="section-label">Services</div>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
-    st.caption("Inngest workflow dashboard")
-    st.code("http://localhost:8288", language=None)
+    st.caption("OpenAI Embeddings")
+    st.code("text-embedding-3-large", language=None)
 with col2:
     st.caption("Qdrant vector database")
-    st.code("http://localhost:6333/dashboard", language=None)
+    qdrant_url = __import__("os").getenv("QDRANT_URL", "http://localhost:6333")
+    st.code(qdrant_url, language=None)

@@ -24,17 +24,22 @@ def _openai_client() -> OpenAI:
     return OpenAI(api_key=api_key)
 
 def _qdrant_client() -> QdrantClient:
-    return QdrantClient(
-        url=os.getenv("QDRANT_URL", "http://localhost:6333"),
-        api_key=os.getenv("QDRANT_API_KEY"),
-        timeout=30,
-    )
+    return QdrantClient(url=os.getenv("QDRANT_URL", "http://localhost:6333"))
 
 def _strip_links(text: str) -> str:
-    """Remove markdown links and bare URLs from answer text."""
+    """Remove markdown links, bare URLs, and parenthetical domain citations from answer text."""
+    # Remove markdown links [text](url) → text
     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    # Remove bare URLs
     text = re.sub(r'https?://\S+', '', text)
+    # Remove parenthetical domain references like (ibm.com) or (arxiv.org)
+    text = re.sub(r'\([a-zA-Z0-9\-]+\.[a-zA-Z]{2,}[^\)]*\)', '', text)
+    # Remove leftover empty parentheses
     text = re.sub(r'\(\s*\)', '', text)
+    # Clean up extra spaces before punctuation
+    text = re.sub(r'\s+([.,;:])', r'\1', text)
+    # Clean up multiple spaces
+    text = re.sub(r'  +', ' ', text)
     return text.strip()
 
 def retrieve_signals_for_topic(topic: str, top_k: int = 6) -> list[dict]:
@@ -183,22 +188,23 @@ def answer_question(question: str, top_k: int = 6) -> dict:
         response = client.responses.create(
             model="gpt-4o-mini",
             tools=[{"type": "web_search_preview"}],
+            tool_choice={"type": "web_search_preview"},
             instructions=(
                 "You are a senior AI research analyst writing for a consulting firm. "
                 "Answer in professional prose — no bullet spam, no URLs, no hyperlinks in the text. "
-                "You have two sources: a curated knowledge base (provided) and live web search. "
-                "Always try the knowledge base first. "
-                "If it is insufficient or the question concerns very recent events, "
-                "supplement with web search. "
+                "You have access to a curated knowledge base (provided as context) AND live web search. "
+                "Use both. Prioritize the knowledge base when relevant, supplement with web for recent events. "
                 "Never fabricate citations. Be precise and analytical."
             ),
             input=(
                 f"Knowledge base context:\n{context_block}\n\n"
                 f"Question: {question}\n\n"
-                "Answer professionally in prose. Do not include any URLs or links in your answer text."
+                "Answer professionally in prose using both the knowledge base and web search. "
+                "Do not include any URLs, links, or parenthetical references in your answer text."
             ),
         )
 
+        # Extract answer text
         for block in response.output:
             if hasattr(block, "content") and isinstance(block.content, list):
                 for content in block.content:
@@ -207,11 +213,28 @@ def answer_question(question: str, top_k: int = 6) -> dict:
             elif hasattr(block, "text") and isinstance(block.text, str):
                 answer += block.text
 
-        # Extract web search citations
+        # Detect web search usage from block types
+        block_types = [type(block).__name__ for block in response.output]
+        print(f"[trend_engine] block types: {block_types}")
+
+        # Web was used if any non-message block appeared
+        used_web = any(
+            "Search" in t or "Tool" in t or t == "WebSearchToolCall"
+            for t in block_types
+        )
+
+        # Also check via type attribute
+        for block in response.output:
+            if hasattr(block, "type"):
+                t = str(getattr(block, "type", "")).lower()
+                if "search" in t or "tool" in t:
+                    used_web = True
+
+        # Try structured annotation extraction
         for block in response.output:
             if hasattr(block, "content") and isinstance(block.content, list):
                 for content in block.content:
-                    if hasattr(content, "annotations"):
+                    if hasattr(content, "annotations") and content.annotations:
                         for ann in content.annotations:
                             if hasattr(ann, "url") and hasattr(ann, "title"):
                                 web_sources.append({
@@ -220,8 +243,10 @@ def answer_question(question: str, top_k: int = 6) -> dict:
                                 })
                                 used_web = True
 
-    except Exception:
-        pass
+        print(f"[trend_engine] used_web={used_web}, web_sources={len(web_sources)}, answer_len={len(answer)}")
+
+    except Exception as e:
+        print(f"[trend_engine] Responses API error: {e}")
 
     # Fallback to chat completions if Responses API failed or returned nothing
     if not answer:
@@ -242,6 +267,7 @@ def answer_question(question: str, top_k: int = 6) -> dict:
             temperature=0.3,
         )
         answer = fallback.choices[0].message.content.strip()
+        used_web = False
 
     kb_sources = [
         {
@@ -253,8 +279,10 @@ def answer_question(question: str, top_k: int = 6) -> dict:
         for h in hits
     ]
 
+    clean_answer = _strip_links(answer) or "No answer could be generated."
+
     return {
-        "answer": _strip_links(answer) or "No answer could be generated.",
+        "answer": clean_answer,
         "kb_sources": kb_sources,
         "web_sources": web_sources,
         "used_web": used_web,

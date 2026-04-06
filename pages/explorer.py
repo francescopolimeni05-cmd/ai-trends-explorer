@@ -25,52 +25,58 @@ st.markdown("Ask any question about AI trends. Every answer is grounded in retri
 st.divider()
 
 def source_badge(kb_sources, web_sources):
-    has_kb = len(kb_sources) > 0
     has_web = len(web_sources) > 0
-    if has_kb and not has_web:
-        label, color, bg, bar, bar_color = "Sourced from knowledge base", "#1a1a1a", "#f0f0ec", "100%", "#1a1a1a"
-        note = "This answer draws exclusively from indexed research papers and curated news feeds."
-    elif has_kb and has_web:
-        label, color, bg, bar, bar_color = "Partially sourced from knowledge base", "#92400e", "#fef3c7", "50%", "#d97706"
-        note = "The knowledge base provided partial context. Live web sources were used to supplement."
+    if has_web:
+        label = "Knowledge base + live web search"
     else:
-        label, color, bg, bar, bar_color = "Sourced from live web search", "#7f1d1d", "#fef2f2", "0%", "#ef4444"
-        note = "No relevant items were found in the knowledge base. This answer relies on live web search."
-
-    st.markdown(f"""
-    <div style="background:{bg};border:1px solid {color}22;border-left:3px solid {color};
-    padding:0.75rem 1rem;margin:0.75rem 0 0.5rem 0;border-radius:2px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem;">
-            <span style="font-size:0.72rem;font-weight:500;letter-spacing:0.08em;text-transform:uppercase;color:{color};">{label}</span>
-            <span style="font-size:0.72rem;color:{color};opacity:0.7;letter-spacing:0.04em;">KB · WEB</span>
-        </div>
-        <div style="background:#e5e5e0;border-radius:1px;height:3px;width:100%;">
-            <div style="background:{bar_color};height:3px;width:{bar};border-radius:1px;"></div>
-        </div>
-        <div style="margin-top:0.4rem;font-size:0.72rem;color:{color};opacity:0.8;">{note}</div>
-    </div>
-    """, unsafe_allow_html=True)
+        label = "Knowledge base"
+    st.markdown(
+        f'<div class="trend-meta" style="margin: 0.5rem 0 0.3rem 0;">Source: {label}</div>',
+        unsafe_allow_html=True
+    )
 
 def render_sources(kb_sources, web_sources):
     if kb_sources:
         with st.expander(f"Official sources  ({len(kb_sources)})"):
             for i, src in enumerate(kb_sources, 1):
-                url, title = src['url'], src['title']
-                meta = f"{i} · {src['source'].upper()} · {src['date']}"
+                url = src.get("url", "")
+                title = src.get("title", "")
+                meta = f"{i} · {src.get('source','').upper()} · {src.get('date','')}"
                 if url:
-                    st.markdown(f"<div style='padding:0.3rem 0;font-size:0.82rem;border-bottom:1px solid #f0ede8;'><span style='color:#9ca3af;font-size:0.7rem;letter-spacing:0.06em;text-transform:uppercase;'>{meta}</span><br><a href='{url}' style='color:#1a1a1a;text-decoration:none;'>{title}</a></div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div style='padding:0.3rem 0;font-size:0.82rem;border-bottom:1px solid #f0ede8;'>"
+                        f"<span style='color:#9ca3af;font-size:0.7rem;letter-spacing:0.06em;text-transform:uppercase;'>{meta}</span><br>"
+                        f"<a href='{url}' style='color:#1a1a1a;text-decoration:none;'>{title}</a></div>",
+                        unsafe_allow_html=True
+                    )
                 else:
-                    st.markdown(f"<div style='padding:0.3rem 0;font-size:0.82rem;border-bottom:1px solid #f0ede8;'><span style='color:#9ca3af;font-size:0.7rem;letter-spacing:0.06em;text-transform:uppercase;'>{meta}</span><br>{title}</div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div style='padding:0.3rem 0;font-size:0.82rem;border-bottom:1px solid #f0ede8;'>"
+                        f"<span style='color:#9ca3af;font-size:0.7rem;letter-spacing:0.06em;text-transform:uppercase;'>{meta}</span><br>"
+                        f"{title}</div>",
+                        unsafe_allow_html=True
+                    )
 
     if web_sources:
         with st.expander(f"Non-official sources  ({len(web_sources)})"):
             st.caption("Retrieved via live web search. Not part of the curated knowledge base.")
             for i, src in enumerate(web_sources, 1):
-                url, title = src['url'], src['title']
+                url = src.get("url", "")
+                title = src.get("title", "")
                 if url:
-                    st.markdown(f"<div style='padding:0.3rem 0;font-size:0.82rem;border-bottom:1px solid #f0ede8;'><span style='color:#9ca3af;font-size:0.7rem;letter-spacing:0.06em;text-transform:uppercase;'>{i} · WEB</span><br><a href='{url}' style='color:#1a1a1a;text-decoration:none;'>{title}</a></div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div style='padding:0.3rem 0;font-size:0.82rem;border-bottom:1px solid #f0ede8;'>"
+                        f"<span style='color:#9ca3af;font-size:0.7rem;letter-spacing:0.06em;text-transform:uppercase;'>{i} · WEB</span><br>"
+                        f"<a href='{url}' style='color:#1a1a1a;text-decoration:none;'>{title}</a></div>",
+                        unsafe_allow_html=True
+                    )
                 else:
-                    st.markdown(f"<div style='padding:0.3rem 0;font-size:0.82rem;'><span style='color:#9ca3af;font-size:0.7rem;letter-spacing:0.06em;text-transform:uppercase;'>{i} · WEB</span><br>{title}</div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div style='padding:0.3rem 0;font-size:0.82rem;'>"
+                        f"<span style='color:#9ca3af;font-size:0.7rem;letter-spacing:0.06em;text-transform:uppercase;'>{i} · WEB</span><br>"
+                        f"{title}</div>",
+                        unsafe_allow_html=True
+                    )
 
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
@@ -100,7 +106,6 @@ if question:
         source_badge(kb, web)
         render_sources(kb, web)
 
-    # Save to persistent history
     save_qa(question, result["answer"], kb, web)
 
     st.session_state["messages"].append({
